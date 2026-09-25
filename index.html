@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>VR 巨幕防变形播放器</title>
+  <title>无变形 VR 巨幕播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body, html { width: 100%; height: 100%; overflow: hidden; background: #050505; font-family: sans-serif; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
     
     #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
     
@@ -18,7 +18,7 @@
     .interactive { pointer-events: auto; }
     
     .btn {
-      background: rgba(20, 20, 20, 0.85); color: #fff; padding: 8px 12px;
+      background: rgba(30, 30, 30, 0.85); color: #fff; padding: 8px 12px;
       border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.3); font-size: 12px;
       cursor: pointer; backdrop-filter: blur(8px);
     }
@@ -26,13 +26,13 @@
     #top-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     
     .slider-box {
-      background: rgba(20, 20, 20, 0.85); padding: 4px 10px; border-radius: 18px;
+      background: rgba(30, 30, 30, 0.85); padding: 4px 10px; border-radius: 18px;
       border: 1px solid rgba(255, 255, 255, 0.3); color: #fff; font-size: 11px;
       display: flex; align-items: center; gap: 6px; backdrop-filter: blur(8px);
     }
 
     #bottom-bar {
-      background: rgba(20, 20, 20, 0.85); padding: 8px 12px; border-radius: 18px;
+      background: rgba(30, 30, 30, 0.85); padding: 8px 12px; border-radius: 18px;
       color: #fff; font-size: 11px; display: flex; justify-content: space-between; align-items: center;
       border: 1px solid rgba(255, 255, 255, 0.15);
     }
@@ -52,8 +52,8 @@
       <button id="reset-btn" class="btn interactive"> 重置视角</button>
       
       <div class="slider-box interactive">
-        <span>屏幕距离</span>
-        <input type="range" id="dist-slider" min="3" max="15" step="0.5" value="6">
+        <span>屏幕距离/大小</span>
+        <input type="range" id="dist-slider" min="2" max="10" step="0.2" value="4">
       </div>
     </div>
 
@@ -74,11 +74,11 @@
     const distSlider = document.getElementById('dist-slider');
     const statusText = document.getElementById('status');
 
-    // 1. 初始化 3D 渲染环境
+    // 1. 初始化 3D 空间
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
-    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -86,47 +86,42 @@
 
     camera.position.set(0, 0, 0);
 
-    // 2. 动态比例曲面大屏 (贴合视频原比例，确保零变形)
-    let screenMesh = null;
+    // 2. 绝对平整的 3D 屏幕网格（坚决不用球体/曲面，保证零变形）
+    let planeMesh = null;
     const texture = new THREE.VideoTexture(video);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    function buildScreen() {
-      if (screenMesh) scene.remove(screenMesh);
+    function buildPlaneScreen() {
+      if (planeMesh) scene.remove(planeMesh);
 
-      // 获取视频原始分辨率和长宽比
-      const vWidth = video.videoWidth || 1920;
-      const vHeight = video.videoHeight || 1080;
+      // 读取视频真实的比例，如果是竖屏就按竖屏，横屏就按横屏
+      const vWidth = video.videoWidth || 1080;
+      const vHeight = video.videoHeight || 1920;
       const aspect = vWidth / vHeight;
 
-      // 依据真实比例生成微弯曲巨幕（弧度 60 度，符合最佳人眼环绕感）
-      const radius = parseFloat(distSlider.value);
-      const thetaLength = Math.PI / 3; // 60度弧长
-      const height = (radius * thetaLength) / aspect; // 按照真实比例严格计算高度
+      // 根据距离 slider 计算 3D 空间尺寸
+      const distance = parseFloat(distSlider.value);
+      const height = 5; 
+      const width = height * aspect; // 严格等比例拉伸，人物绝对不发扁
 
-      const geometry = new THREE.CylinderGeometry(
-        radius, radius, height, 64, 1, true, -thetaLength / 2, thetaLength
-      );
-      geometry.scale(-1, 1, 1); // 内侧渲染
-
+      const geometry = new THREE.PlaneGeometry(width, height);
       const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-      screenMesh = new THREE.Mesh(geometry, material);
-      
-      // 保证视频正面朝向相机
-      screenMesh.rotation.y = Math.PI;
-      scene.add(screenMesh);
+      planeMesh = new THREE.Mesh(geometry, material);
+
+      // 放置在相机正前方
+      planeMesh.position.set(0, 0, -distance);
+      scene.add(planeMesh);
     }
 
-    // 初始创建一个默认屏幕
-    buildScreen();
+    buildPlaneScreen();
 
-    // 3. 调节屏幕距离
+    // 调整距离
     distSlider.addEventListener('input', () => {
-      buildScreen();
+      buildPlaneScreen();
     });
 
-    // 4. 视角拖拽与陀螺仪
+    // 3. 手势与陀螺仪控制视角
     let lon = 0, lat = 0;
     let startX = 0, startY = 0;
 
@@ -178,13 +173,13 @@
       }
     }
 
-    // 5. 视频加载并重新匹配宽高比
+    // 4. 加载与播放视频
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
         video.src = URL.createObjectURL(file);
         video.onloadedmetadata = () => {
-          buildScreen(); // 加载视频后重新根据像素比例渲染
+          buildPlaneScreen(); // 读取到真正长宽比后重新渲染
         };
         video.play();
         playBtn.textContent = '❚❚ 暂停';
@@ -203,7 +198,7 @@
       }
     });
 
-    // 6. 逐帧渲染
+    // 5. 渲染循环
     function animate() {
       requestAnimationFrame(animate);
       
@@ -228,3 +223,4 @@
   </script>
 </body>
 </html>
+
