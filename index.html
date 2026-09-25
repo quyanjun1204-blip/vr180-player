@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>标准 VR 全景视频播放器</title>
+  <title>可调方向 VR 全景播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -13,20 +13,27 @@
     #ui {
       position: absolute; top: 0; left: 0; width: 100%; height: 100%;
       z-index: 10; pointer-events: none;
-      display: flex; flex-direction: column; justify-content: space-between; padding: 15px;
+      display: flex; flex-direction: column; justify-content: space-between; padding: 12px;
     }
     .interactive { pointer-events: auto; }
     
     .btn {
-      background: rgba(0, 0, 0, 0.7); color: #fff; padding: 8px 14px;
-      border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.3); font-size: 13px;
+      background: rgba(0, 0, 0, 0.8); color: #fff; padding: 8px 12px;
+      border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.4); font-size: 12px;
       cursor: pointer; backdrop-filter: blur(5px);
     }
 
-    #top-bar { display: flex; gap: 8px; flex-wrap: wrap; }
+    #top-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    
+    .slider-box {
+      background: rgba(0,0,0,0.8); padding: 4px 10px; border-radius: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.3); color: #fff; font-size: 11px;
+      display: flex; align-items: center; gap: 6px;
+    }
+
     #bottom-bar {
-      background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 20px;
-      color: #fff; font-size: 12px; display: flex; justify-content: space-between; align-items: center;
+      background: rgba(0,0,0,0.8); padding: 8px 12px; border-radius: 18px;
+      color: #fff; font-size: 11px; display: flex; justify-content: space-between; align-items: center;
     }
   </style>
   <script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
@@ -36,13 +43,17 @@
   <div id="ui">
     <div id="top-bar">
       <label class="btn interactive">
-         选择MP4
+         选MP4
         <input type="file" id="video-file" accept="video/*" style="display:none;">
       </label>
       <button id="play-btn" class="btn interactive">▶ 播放</button>
-      <button id="sensor-btn" class="btn interactive"> 开启陀螺仪</button>
-      <button id="flip-btn" class="btn interactive"> 旋转180°</button>
-      <button id="reset-btn" class="btn interactive"> 视角居中</button>
+      <button id="rotate-btn" class="btn interactive"> 旋转画面 (0°)</button>
+      <button id="sensor-btn" class="btn interactive">开启陀螺仪</button>
+      
+      <div class="slider-box interactive">
+        <span>视野大小</span>
+        <input type="range" id="fov-slider" min="30" max="110" value="75">
+      </div>
     </div>
 
     <div id="bottom-bar">
@@ -57,49 +68,53 @@
     const video = document.getElementById('video');
     const fileInput = document.getElementById('video-file');
     const playBtn = document.getElementById('play-btn');
+    const rotateBtn = document.getElementById('rotate-btn');
     const sensorBtn = document.getElementById('sensor-btn');
-    const flipBtn = document.getElementById('flip-btn');
-    const resetBtn = document.getElementById('reset-btn');
+    const fovSlider = document.getElementById('fov-slider');
     const statusText = document.getElementById('status');
 
-    // 1. 初始化 3D 全景场景
+    // 1. 初始化 3D 渲染环境
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
-    // 标准 75° 人眼视角
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
 
-    // 2. 创建真正的 VR 全景球体 (Sphere)
+    // 2. 创建 360 度 VR 渲染球体
     const texture = new THREE.VideoTexture(video);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    // 半径 500 的全景球
     const geometry = new THREE.SphereGeometry(500, 60, 40);
-    // 翻转 X 轴，将贴图贴在球体内侧，实现真实 VR 沉浸感
-    geometry.scale(-1, 1, 1);
+    geometry.scale(-1, 1, 1); // 内侧贴图
 
     const material = new THREE.MeshBasicMaterial({ map: texture });
     const sphereMesh = new THREE.Mesh(geometry, material);
-    
-    // 正向修正：翻转 Y 轴/Z 轴矫正倒立
-    sphereMesh.rotation.y = -Math.PI / 2;
     scene.add(sphereMesh);
 
-    camera.position.set(0, 0, 0); // 人眼置于球心
+    camera.position.set(0, 0, 0);
 
-    // 3. 画面上下颠倒手动切换
-    let isFlipped = false;
-    flipBtn.addEventListener('click', () => {
-      isFlipped = !isFlipped;
-      sphereMesh.rotation.z = isFlipped ? Math.PI : 0;
+    // 3. 画面 90 度四向旋转算法（彻底解决倒立）
+    let currentRotationIndex = 0;
+    const rotations = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+    const rotationLabels = ['0°', '90°', '180°', '270°'];
+
+    rotateBtn.addEventListener('click', () => {
+      currentRotationIndex = (currentRotationIndex + 1) % 4;
+      sphereMesh.rotation.z = rotations[currentRotationIndex];
+      rotateBtn.textContent = ` 旋转画面 (${rotationLabels[currentRotationIndex]})`;
     });
 
-    // 4. 手势拖拽视角与陀螺仪
+    // 4. 调节视野 FOV（拉近/远画面）
+    fovSlider.addEventListener('input', (e) => {
+      camera.fov = parseFloat(e.target.value);
+      camera.updateProjectionMatrix();
+    });
+
+    // 5. 视角拖拽与陀螺仪
     let lon = 0, lat = 0;
     let startX = 0, startY = 0;
 
@@ -122,12 +137,6 @@
       }
     });
 
-    resetBtn.addEventListener('click', () => {
-      lon = 0;
-      lat = 0;
-    });
-
-    // 开启陀螺仪
     sensorBtn.addEventListener('click', () => {
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         DeviceOrientationEvent.requestPermission().then(state => {
@@ -151,7 +160,7 @@
       }
     }
 
-    // 5. 文件加载与播放
+    // 6. 视频加载与播放
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
@@ -173,11 +182,10 @@
       }
     });
 
-    // 6. 渲染循环
+    // 7. 渲染循环
     function animate() {
       requestAnimationFrame(animate);
       
-      // 触屏拖拽控制视线指向
       const phi = THREE.MathUtils.degToRad(90 - lat);
       const theta = THREE.MathUtils.degToRad(lon);
       const target = new THREE.Vector3(
