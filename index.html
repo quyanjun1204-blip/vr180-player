@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>平铺正向 VR 视频播放器</title>
+  <title>标准 VR 全景视频播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -18,14 +18,14 @@
     .interactive { pointer-events: auto; }
     
     .btn {
-      background: rgba(30, 30, 30, 0.8); color: #fff; padding: 8px 16px;
-      border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.3); font-size: 13px;
+      background: rgba(0, 0, 0, 0.7); color: #fff; padding: 8px 14px;
+      border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.3); font-size: 13px;
       cursor: pointer; backdrop-filter: blur(5px);
     }
 
     #top-bar { display: flex; gap: 8px; flex-wrap: wrap; }
     #bottom-bar {
-      background: rgba(0,0,0,0.7); padding: 10px 15px; border-radius: 20px;
+      background: rgba(0,0,0,0.7); padding: 8px 15px; border-radius: 20px;
       color: #fff; font-size: 12px; display: flex; justify-content: space-between; align-items: center;
     }
   </style>
@@ -36,16 +36,17 @@
   <div id="ui">
     <div id="top-bar">
       <label class="btn interactive">
-        选择MP4
+         选择MP4
         <input type="file" id="video-file" accept="video/*" style="display:none;">
       </label>
-      <button id="play-btn" class="btn interactive">播放</button>
-      <button id="sensor-btn" class="btn interactive">启用陀螺仪</button>
-      <button id="reset-btn" class="btn interactive">居中视角</button>
+      <button id="play-btn" class="btn interactive">▶ 播放</button>
+      <button id="sensor-btn" class="btn interactive"> 开启陀螺仪</button>
+      <button id="flip-btn" class="btn interactive"> 旋转180°</button>
+      <button id="reset-btn" class="btn interactive"> 视角居中</button>
     </div>
 
     <div id="bottom-bar">
-      <span id="status">状态: 请选择本地 MP4 视频</span>
+      <span id="status">状态: 请导入本地 MP4 视频</span>
     </div>
   </div>
 
@@ -57,42 +58,48 @@
     const fileInput = document.getElementById('video-file');
     const playBtn = document.getElementById('play-btn');
     const sensorBtn = document.getElementById('sensor-btn');
+    const flipBtn = document.getElementById('flip-btn');
     const resetBtn = document.getElementById('reset-btn');
     const statusText = document.getElementById('status');
 
-    // 1. 初始化 Scene & Camera
+    // 1. 初始化 3D 全景场景
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
-    // 60度 FOV，避免视角拉伸过猛
-    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // 标准 75° 人眼视角
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     container.appendChild(renderer.domElement);
 
-    // 2. 贴图与几何体纠正（正向 + 放大平铺）
+    // 2. 创建真正的 VR 全景球体 (Sphere)
     const texture = new THREE.VideoTexture(video);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    // 创建平铺微曲面巨幕 (半径 12，弧度适当放平)
-    const geometry = new THREE.SphereGeometry(12, 64, 32, Math.PI * 0.25, Math.PI * 0.5, Math.PI * 0.2, Math.PI * 0.6);
-    
-    // 内侧可见
+    // 半径 500 的全景球
+    const geometry = new THREE.SphereGeometry(500, 60, 40);
+    // 翻转 X 轴，将贴图贴在球体内侧，实现真实 VR 沉浸感
     geometry.scale(-1, 1, 1);
 
-    const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-    const mesh = new THREE.Mesh(geometry, material);
+    const material = new THREE.MeshBasicMaterial({ map: texture });
+    const sphereMesh = new THREE.Mesh(geometry, material);
+    
+    // 正向修正：翻转 Y 轴/Z 轴矫正倒立
+    sphereMesh.rotation.y = -Math.PI / 2;
+    scene.add(sphereMesh);
 
-    // 【关键纠正】：翻转 180 度矫正画面颠倒，并调整正面居中
-    mesh.rotation.z = Math.PI; 
-    mesh.rotation.y = Math.PI / 2;
-    scene.add(mesh);
+    camera.position.set(0, 0, 0); // 人眼置于球心
 
-    camera.position.set(0, 0, 0);
+    // 3. 画面上下颠倒手动切换
+    let isFlipped = false;
+    flipBtn.addEventListener('click', () => {
+      isFlipped = !isFlipped;
+      sphereMesh.rotation.z = isFlipped ? Math.PI : 0;
+    });
 
-    // 3. 视角拖拽与陀螺仪
+    // 4. 手势拖拽视角与陀螺仪
     let lon = 0, lat = 0;
     let startX = 0, startY = 0;
 
@@ -109,20 +116,18 @@
         const deltaY = e.touches[0].clientY - startY;
         startX = e.touches[0].clientX;
         startY = e.touches[0].clientY;
-        lon -= deltaX * 0.2;
-        lat += deltaY * 0.2;
-        lat = Math.max(-60, Math.min(60, lat));
+        lon -= deltaX * 0.25;
+        lat += deltaY * 0.25;
+        lat = Math.max(-85, Math.min(85, lat));
       }
     });
 
-    // 重置视角居中
     resetBtn.addEventListener('click', () => {
       lon = 0;
       lat = 0;
-      camera.rotation.set(0, 0, 0);
     });
 
-    // 启用陀螺仪
+    // 开启陀螺仪
     sensorBtn.addEventListener('click', () => {
       if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
         DeviceOrientationEvent.requestPermission().then(state => {
@@ -146,13 +151,13 @@
       }
     }
 
-    // 4. 视频播放
+    // 5. 文件加载与播放
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
         video.src = URL.createObjectURL(file);
         video.play();
-        playBtn.textContent = '暂停';
+        playBtn.textContent = '❚❚ 暂停';
         statusText.textContent = '状态: 正在播放 ' + file.name;
       }
     });
@@ -161,16 +166,18 @@
       if (!video.src) return;
       if (video.paused) {
         video.play();
-        playBtn.textContent = '暂停';
+        playBtn.textContent = '❚❚ 暂停';
       } else {
         video.pause();
-        playBtn.textContent = '播放';
+        playBtn.textContent = '▶ 播放';
       }
     });
 
-    // 渲染循环
+    // 6. 渲染循环
     function animate() {
       requestAnimationFrame(animate);
+      
+      // 触屏拖拽控制视线指向
       const phi = THREE.MathUtils.degToRad(90 - lat);
       const theta = THREE.MathUtils.degToRad(lon);
       const target = new THREE.Vector3(
@@ -179,6 +186,7 @@
         500 * Math.sin(phi) * Math.sin(theta)
       );
       camera.lookAt(target);
+
       renderer.render(scene, camera);
     }
     animate();
