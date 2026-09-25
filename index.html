@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>无变形 VR 180 巨幕播放器</title>
+  <title>VR 180 缩放控制播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -21,7 +21,9 @@
       background: rgba(30, 30, 30, 0.85); color: #fff; padding: 8px 12px;
       border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.4); font-size: 12px;
       cursor: pointer; backdrop-filter: blur(8px);
+      user-select: none;
     }
+    .btn:active { background: rgba(80, 80, 80, 0.9); }
 
     #top-bar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     
@@ -48,13 +50,15 @@
         <input type="file" id="video-file" accept="video/*" style="display:none;">
       </label>
       <button id="play-btn" class="btn interactive">▶ 播放</button>
+      <button id="zoom-in-btn" class="btn interactive"> 放大</button>
+      <button id="zoom-out-btn" class="btn interactive"> 缩小</button>
       <button id="flip-btn" class="btn interactive"> 旋转180°</button>
       <button id="sensor-btn" class="btn interactive">开启陀螺仪</button>
       <button id="reset-btn" class="btn interactive"> 重置视角</button>
       
       <div class="slider-box interactive">
-        <span>屏幕距离</span>
-        <input type="range" id="dist-slider" min="2" max="8" step="0.5" value="3.5">
+        <span>距离</span>
+        <input type="range" id="dist-slider" min="1.5" max="8" step="0.2" value="3.5">
       </div>
     </div>
 
@@ -65,7 +69,6 @@
 
   <div id="canvas-container"></div>
   
-  <!-- 隐藏的 video 与 中转 2D canvas 确保兼容性 -->
   <video id="video" loop playsinline webkit-playsinline crossorigin="anonymous" style="display:none;"></video>
   <canvas id="texture-canvas" style="display:none;"></canvas>
 
@@ -73,17 +76,18 @@
     const video = document.getElementById('video');
     const fileInput = document.getElementById('video-file');
     const playBtn = document.getElementById('play-btn');
+    const zoomInBtn = document.getElementById('zoom-in-btn');
+    const zoomOutBtn = document.getElementById('zoom-out-btn');
     const flipBtn = document.getElementById('flip-btn');
     const sensorBtn = document.getElementById('sensor-btn');
     const resetBtn = document.getElementById('reset-btn');
     const distSlider = document.getElementById('dist-slider');
     const statusText = document.getElementById('status');
 
-    // 2D 贴图缓冲 Canvas (彻底解决手机浏览器跨域/贴图黑屏问题)
     const textureCanvas = document.getElementById('texture-canvas');
     const ctx = textureCanvas.getContext('2d');
 
-    // 1. 初始化 Three.js 3D 渲染器
+    // 1. 初始化 3D 场景
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
@@ -95,7 +99,7 @@
 
     camera.position.set(0, 0, 0);
 
-    // 2. 创建动态 Canvas 贴图
+    // 2. 贴图与屏幕建网
     const texture = new THREE.CanvasTexture(textureCanvas);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
@@ -103,7 +107,6 @@
     let screenMesh = null;
     let isFlipped = false;
 
-    // 重新构建无变形的 180 度弧面屏幕
     function buildScreen() {
       if (screenMesh) scene.remove(screenMesh);
 
@@ -113,7 +116,6 @@
 
       const radius = parseFloat(distSlider.value);
       
-      // 100度微弧形，保持包裹感同时绝不拉伸人物
       const arcAngle = Math.PI * 0.55; 
       const arcLength = radius * arcAngle;
       const height = arcLength / aspect;
@@ -121,7 +123,7 @@
       const geometry = new THREE.CylinderGeometry(
         radius, radius, height, 64, 1, true, -arcAngle / 2, arcAngle
       );
-      geometry.scale(-1, 1, 1); // 内侧渲染
+      geometry.scale(-1, 1, 1);
 
       const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
       screenMesh = new THREE.Mesh(geometry, material);
@@ -132,16 +134,30 @@
       scene.add(screenMesh);
     }
 
-    // 屏幕距离拉杆
+    // 3. 放大缩小视角逻辑
+    zoomInBtn.addEventListener('click', () => {
+      let currentVal = parseFloat(distSlider.value);
+      currentVal = Math.max(parseFloat(distSlider.min), currentVal - 0.5); // 减小距离 = 放大视角
+      distSlider.value = currentVal;
+      buildScreen();
+    });
+
+    zoomOutBtn.addEventListener('click', () => {
+      let currentVal = parseFloat(distSlider.value);
+      currentVal = Math.min(parseFloat(distSlider.max), currentVal + 0.5); // 增大距离 = 缩小视角
+      distSlider.value = currentVal;
+      buildScreen();
+    });
+
     distSlider.addEventListener('input', buildScreen);
 
-    // 画面颠倒翻转 180°
+    // 旋转翻转 180°
     flipBtn.addEventListener('click', () => {
       isFlipped = !isFlipped;
       if (screenMesh) screenMesh.rotation.z = isFlipped ? Math.PI : 0;
     });
 
-    // 3. 视角控制（手势拖拽 + 陀螺仪）
+    // 4. 视角交互与陀螺仪
     let lon = 0, lat = 0;
     let startX = 0, startY = 0;
 
@@ -193,7 +209,7 @@
       }
     }
 
-    // 4. 选择视频与播放控制
+    // 5. 视频加载与播放
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
@@ -205,7 +221,6 @@
           buildScreen();
         };
 
-        // 强行尝试播放
         video.play().then(() => {
           playBtn.textContent = '❚❚ 暂停';
           statusText.textContent = '状态: 正在播放 ' + file.name;
@@ -226,11 +241,10 @@
       }
     });
 
-    // 5. 逐帧渲染（Canvas 中转重绘，保证 100% 不黑屏）
+    // 6. 渲染循环
     function animate() {
       requestAnimationFrame(animate);
       
-      // 视频播放时，实时将视频帧绘制到中转 Canvas 并刷新贴图
       if (video.readyState >= video.HAVE_CURRENT_DATA) {
         ctx.drawImage(video, 0, 0, textureCanvas.width, textureCanvas.height);
         texture.needsUpdate = true;
