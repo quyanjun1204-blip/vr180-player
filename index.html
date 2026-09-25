@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>VR 180 环绕巨幕播放器</title>
+  <title>无变形 VR 180 巨幕播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -19,7 +19,7 @@
     
     .btn {
       background: rgba(30, 30, 30, 0.85); color: #fff; padding: 8px 12px;
-      border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.3); font-size: 12px;
+      border-radius: 18px; border: 1px solid rgba(255, 255, 255, 0.4); font-size: 12px;
       cursor: pointer; backdrop-filter: blur(8px);
     }
 
@@ -27,14 +27,14 @@
     
     .slider-box {
       background: rgba(30, 30, 30, 0.85); padding: 4px 10px; border-radius: 18px;
-      border: 1px solid rgba(255, 255, 255, 0.3); color: #fff; font-size: 11px;
+      border: 1px solid rgba(255, 255, 255, 0.4); color: #fff; font-size: 11px;
       display: flex; align-items: center; gap: 6px; backdrop-filter: blur(8px);
     }
 
     #bottom-bar {
       background: rgba(30, 30, 30, 0.85); padding: 8px 12px; border-radius: 18px;
       color: #fff; font-size: 11px; display: flex; justify-content: space-between; align-items: center;
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      border: 1px solid rgba(255, 255, 255, 0.2);
     }
   </style>
   <script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
@@ -54,7 +54,7 @@
       
       <div class="slider-box interactive">
         <span>屏幕距离</span>
-        <input type="range" id="dist-slider" min="2" max="10" step="0.5" value="4">
+        <input type="range" id="dist-slider" min="2" max="8" step="0.5" value="3.5">
       </div>
     </div>
 
@@ -64,7 +64,10 @@
   </div>
 
   <div id="canvas-container"></div>
+  
+  <!-- 隐藏的 video 与 中转 2D canvas 确保兼容性 -->
   <video id="video" loop playsinline webkit-playsinline crossorigin="anonymous" style="display:none;"></video>
+  <canvas id="texture-canvas" style="display:none;"></canvas>
 
   <script>
     const video = document.getElementById('video');
@@ -76,7 +79,11 @@
     const distSlider = document.getElementById('dist-slider');
     const statusText = document.getElementById('status');
 
-    // 1. 初始化 3D 场景
+    // 2D 贴图缓冲 Canvas (彻底解决手机浏览器跨域/贴图黑屏问题)
+    const textureCanvas = document.getElementById('texture-canvas');
+    const ctx = textureCanvas.getContext('2d');
+
+    // 1. 初始化 Three.js 3D 渲染器
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
@@ -88,59 +95,53 @@
 
     camera.position.set(0, 0, 0);
 
-    // 2. 创建视频纹理与屏幕
-    const texture = new THREE.VideoTexture(video);
+    // 2. 创建动态 Canvas 贴图
+    const texture = new THREE.CanvasTexture(textureCanvas);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
     let screenMesh = null;
     let isFlipped = false;
 
-    function buildVRScreen() {
+    // 重新构建无变形的 180 度弧面屏幕
+    function buildScreen() {
       if (screenMesh) scene.remove(screenMesh);
 
-      // 读取真实宽高，默认赋予竖屏 9:16 比例防止零尺寸黑屏
       const vWidth = video.videoWidth || 1080;
       const vHeight = video.videoHeight || 1920;
       const aspect = vWidth / vHeight;
 
       const radius = parseFloat(distSlider.value);
       
-      // 180 度弧形巨幕 (角度 100 度弧形，兼顾沉浸感与无变形)
+      // 100度微弧形，保持包裹感同时绝不拉伸人物
       const arcAngle = Math.PI * 0.55; 
       const arcLength = radius * arcAngle;
-      const height = arcLength / aspect; // 保持 1:1 绝对不变形
+      const height = arcLength / aspect;
 
       const geometry = new THREE.CylinderGeometry(
         radius, radius, height, 64, 1, true, -arcAngle / 2, arcAngle
       );
-      geometry.scale(-1, 1, 1); // 翻转内侧可见
+      geometry.scale(-1, 1, 1); // 内侧渲染
 
       const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
       screenMesh = new THREE.Mesh(geometry, material);
 
-      // 正对相机视角
       screenMesh.rotation.y = Math.PI;
       if (isFlipped) screenMesh.rotation.z = Math.PI;
 
       scene.add(screenMesh);
     }
 
-    // 初始化默认创建一次
-    buildVRScreen();
-
     // 屏幕距离拉杆
-    distSlider.addEventListener('input', () => {
-      buildVRScreen();
-    });
+    distSlider.addEventListener('input', buildScreen);
 
-    // 翻转画面 180°
+    // 画面颠倒翻转 180°
     flipBtn.addEventListener('click', () => {
       isFlipped = !isFlipped;
       if (screenMesh) screenMesh.rotation.z = isFlipped ? Math.PI : 0;
     });
 
-    // 3. 手势与陀螺仪控制视角
+    // 3. 视角控制（手势拖拽 + 陀螺仪）
     let lon = 0, lat = 0;
     let startX = 0, startY = 0;
 
@@ -192,23 +193,24 @@
       }
     }
 
-    // 4. 视频加载与播放触发
+    // 4. 选择视频与播放控制
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
         video.src = URL.createObjectURL(file);
         
-        // 确保视频数据加载完后实时计算画面
-        video.onloadeddata = () => {
-          buildVRScreen();
+        video.onloadedmetadata = () => {
+          textureCanvas.width = video.videoWidth;
+          textureCanvas.height = video.videoHeight;
+          buildScreen();
         };
 
+        // 强行尝试播放
         video.play().then(() => {
           playBtn.textContent = '❚❚ 暂停';
           statusText.textContent = '状态: 正在播放 ' + file.name;
-          buildVRScreen();
-        }).catch(err => {
-          statusText.textContent = '状态: 点击播放按钮开始';
+        }).catch(() => {
+          statusText.textContent = '状态: 已就绪，请点击上方的【▶ 播放】';
         });
       }
     });
@@ -224,10 +226,16 @@
       }
     });
 
-    // 5. 逐帧渲染
+    // 5. 逐帧渲染（Canvas 中转重绘，保证 100% 不黑屏）
     function animate() {
       requestAnimationFrame(animate);
       
+      // 视频播放时，实时将视频帧绘制到中转 Canvas 并刷新贴图
+      if (video.readyState >= video.HAVE_CURRENT_DATA) {
+        ctx.drawImage(video, 0, 0, textureCanvas.width, textureCanvas.height);
+        texture.needsUpdate = true;
+      }
+
       const phi = THREE.MathUtils.degToRad(90 - lat);
       const theta = THREE.MathUtils.degToRad(lon);
       const target = new THREE.Vector3(
