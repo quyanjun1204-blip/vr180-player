@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>无变形 VR 巨幕播放器</title>
+  <title>VR 180 环绕巨幕播放器</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; }
@@ -48,12 +48,13 @@
         <input type="file" id="video-file" accept="video/*" style="display:none;">
       </label>
       <button id="play-btn" class="btn interactive">▶ 播放</button>
+      <button id="flip-btn" class="btn interactive"> 旋转180°</button>
       <button id="sensor-btn" class="btn interactive">开启陀螺仪</button>
       <button id="reset-btn" class="btn interactive"> 重置视角</button>
       
       <div class="slider-box interactive">
-        <span>屏幕距离/大小</span>
-        <input type="range" id="dist-slider" min="2" max="10" step="0.2" value="4">
+        <span>屏幕距离</span>
+        <input type="range" id="dist-slider" min="2" max="10" step="0.5" value="4">
       </div>
     </div>
 
@@ -69,12 +70,13 @@
     const video = document.getElementById('video');
     const fileInput = document.getElementById('video-file');
     const playBtn = document.getElementById('play-btn');
+    const flipBtn = document.getElementById('flip-btn');
     const sensorBtn = document.getElementById('sensor-btn');
     const resetBtn = document.getElementById('reset-btn');
     const distSlider = document.getElementById('dist-slider');
     const statusText = document.getElementById('status');
 
-    // 1. 初始化 3D 空间
+    // 1. 初始化 3D 场景
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     
@@ -86,39 +88,56 @@
 
     camera.position.set(0, 0, 0);
 
-    // 2. 绝对平整的 3D 屏幕网格（坚决不用球体/曲面，保证零变形）
-    let planeMesh = null;
+    // 2. 创建视频纹理与屏幕
     const texture = new THREE.VideoTexture(video);
     texture.minFilter = THREE.LinearFilter;
     texture.magFilter = THREE.LinearFilter;
 
-    function buildPlaneScreen() {
-      if (planeMesh) scene.remove(planeMesh);
+    let screenMesh = null;
+    let isFlipped = false;
 
-      // 读取视频真实的比例，如果是竖屏就按竖屏，横屏就按横屏
+    function buildVRScreen() {
+      if (screenMesh) scene.remove(screenMesh);
+
+      // 读取真实宽高，默认赋予竖屏 9:16 比例防止零尺寸黑屏
       const vWidth = video.videoWidth || 1080;
       const vHeight = video.videoHeight || 1920;
       const aspect = vWidth / vHeight;
 
-      // 根据距离 slider 计算 3D 空间尺寸
-      const distance = parseFloat(distSlider.value);
-      const height = 5; 
-      const width = height * aspect; // 严格等比例拉伸，人物绝对不发扁
+      const radius = parseFloat(distSlider.value);
+      
+      // 180 度弧形巨幕 (角度 100 度弧形，兼顾沉浸感与无变形)
+      const arcAngle = Math.PI * 0.55; 
+      const arcLength = radius * arcAngle;
+      const height = arcLength / aspect; // 保持 1:1 绝对不变形
 
-      const geometry = new THREE.PlaneGeometry(width, height);
+      const geometry = new THREE.CylinderGeometry(
+        radius, radius, height, 64, 1, true, -arcAngle / 2, arcAngle
+      );
+      geometry.scale(-1, 1, 1); // 翻转内侧可见
+
       const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-      planeMesh = new THREE.Mesh(geometry, material);
+      screenMesh = new THREE.Mesh(geometry, material);
 
-      // 放置在相机正前方
-      planeMesh.position.set(0, 0, -distance);
-      scene.add(planeMesh);
+      // 正对相机视角
+      screenMesh.rotation.y = Math.PI;
+      if (isFlipped) screenMesh.rotation.z = Math.PI;
+
+      scene.add(screenMesh);
     }
 
-    buildPlaneScreen();
+    // 初始化默认创建一次
+    buildVRScreen();
 
-    // 调整距离
+    // 屏幕距离拉杆
     distSlider.addEventListener('input', () => {
-      buildPlaneScreen();
+      buildVRScreen();
+    });
+
+    // 翻转画面 180°
+    flipBtn.addEventListener('click', () => {
+      isFlipped = !isFlipped;
+      if (screenMesh) screenMesh.rotation.z = isFlipped ? Math.PI : 0;
     });
 
     // 3. 手势与陀螺仪控制视角
@@ -173,17 +192,24 @@
       }
     }
 
-    // 4. 加载与播放视频
+    // 4. 视频加载与播放触发
     fileInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
         video.src = URL.createObjectURL(file);
-        video.onloadedmetadata = () => {
-          buildPlaneScreen(); // 读取到真正长宽比后重新渲染
+        
+        // 确保视频数据加载完后实时计算画面
+        video.onloadeddata = () => {
+          buildVRScreen();
         };
-        video.play();
-        playBtn.textContent = '❚❚ 暂停';
-        statusText.textContent = '状态: 正在播放 ' + file.name;
+
+        video.play().then(() => {
+          playBtn.textContent = '❚❚ 暂停';
+          statusText.textContent = '状态: 正在播放 ' + file.name;
+          buildVRScreen();
+        }).catch(err => {
+          statusText.textContent = '状态: 点击播放按钮开始';
+        });
       }
     });
 
@@ -198,7 +224,7 @@
       }
     });
 
-    // 5. 渲染循环
+    // 5. 逐帧渲染
     function animate() {
       requestAnimationFrame(animate);
       
