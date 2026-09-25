@@ -1,361 +1,224 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>180°手机VR播放器</title>
-<style>
-*{box-sizing:border-box}
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-#app{position:fixed;inset:0;background:#000}
-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
-#video{display:none}
-#ui{position:absolute;left:0;right:0;top:0;z-index:5;padding:max(10px,env(safe-area-inset-top)) 10px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:linear-gradient(rgba(0,0,0,.65),transparent)}
-button,label{border:0;border-radius:10px;background:rgba(30,30,30,.88);color:#fff;padding:9px 12px;font-size:14px}
-button:active,label:active{background:rgba(80,80,80,.95)}
-input{display:none}
-#status{position:absolute;left:10px;right:10px;bottom:max(10px,env(safe-area-inset-bottom));z-index:5;background:rgba(0,0,0,.65);border-radius:9px;padding:8px 10px;font-size:12px;line-height:1.45}
-#hint{position:absolute;z-index:4;left:50%;top:50%;transform:translate(-50%,-50%);width:85%;text-align:center;color:#ddd;line-height:1.7}
-#cross{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;background:#fff;border-radius:50%;opacity:.35;z-index:3;pointer-events:none}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+  <title>180° 第一视角 VR 播放器</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body, html { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    
+    #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+    
+    /* 前端控制界面 */
+    #ui {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      z-index: 10; pointer-events: none;
+      display: flex; flex-direction: column; justify-content: space-between; padding: 15px;
+    }
+    .interactive { pointer-events: auto; }
+    
+    .btn-label {
+      background: rgba(20, 20, 20, 0.75); color: #fff; padding: 10px 18px;
+      border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.25); font-size: 13px;
+      backdrop-filter: blur(8px); display: inline-block; cursor: pointer;
+    }
+
+    #controls {
+      background: rgba(20, 20, 20, 0.75); padding: 10px 20px; border-radius: 25px;
+      display: flex; align-items: center; justify-content: space-between; color: #fff;
+      backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    #play-btn { background: none; border: none; color: #fff; font-size: 15px; cursor: pointer; font-weight: bold; }
+    
+    #sensor-btn {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: #007aff; color: white; border: none; padding: 14px 28px;
+      border-radius: 30px; font-size: 15px; font-weight: bold; z-index: 20;
+      box-shadow: 0 4px 15px rgba(0, 122, 255, 0.4); cursor: pointer;
+    }
+
+    /* 沉浸感调节调焦提示 */
+    #fov-hint {
+      position: absolute; top: 60px; right: 15px;
+      background: rgba(0,0,0,0.5); color: #ccc; font-size: 11px;
+      padding: 6px 10px; border-radius: 12px; backdrop-filter: blur(4px);
+    }
+  </style>
+  <!-- 引入 Three.js 引擎 (极速 CDN) -->
+  <script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
-<div id="app">
-<video id="video" playsinline webkit-playsinline preload="metadata"></video>
-<canvas id="canvas"></canvas>
-<div id="ui">
-<label>选择MP4<input id="file" type="file" accept="video/*"></label>
-<button id="play">播放</button>
-<button id="gyro">启用陀螺仪</button>
-<button id="center">居中</button>
-<button id="full">全屏</button>
-</div>
-<div id="hint">请选择一个普通 MP4 视频</div>
-<div id="cross"></div>
-<div id="status">状态：等待视频　｜　陀螺仪：未启用</div>
-</div>
 
-<script>
-"use strict";
-const $=id=>document.getElementById(id);
-const video=$("video"), canvas=$("canvas");
-const gl=canvas.getContext("webgl",{alpha:false,antialias:false});
-const hint=$("hint"), status=$("status");
+  <button id="sensor-btn" class="interactive">开启陀螺仪 / 第一视角</button>
 
-let objectURL=null, sensor=false, firstOrientation=true;
-let yaw=0,pitch=0,drag=false,lastX=0,lastY=0;
-let baseAlpha=0,baseBeta=0;
+  <div id="ui">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+      <label class="btn-label interactive">
+         选择 MP4 视频
+        <input type="file" id="video-file" accept="video/*" style="display:none;">
+      </label>
+      <div id="fov-hint"> 双指捏合可调节拉近/远</div>
+    </div>
 
-if(!gl){
-  status.textContent="状态：此浏览器不支持 WebGL";
-  throw new Error("WebGL unavailable");
-}
+    <div id="controls" class="interactive">
+      <button id="play-btn">▶ 播放</button>
+      <span id="file-name" style="font-size:12px; opacity:0.8; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">未选择视频</span>
+    </div>
+  </div>
 
-/*
-  修正版：
-  不再使用 tan(90°) 的无限透视。
-  改成“半圆柱面”映射：
-  - 普通 MP4 被铺到前方 180° 的弧形屏幕上
-  - 手机转动时改变观察方向
-  - 中间不会再出现截图里的“所有画面汇聚到一个点”的放射状拉伸
-*/
-const VS=`
-attribute vec2 aPos;
-varying vec2 vUv;
-void main(){
-  gl_Position=vec4(aPos,0.0,1.0);
-  vUv=aPos*0.5+0.5;
-}`;
+  <div id="canvas-container"></div>
 
-const FS=`
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D uVideo;
-uniform float uYaw;
-uniform float uPitch;
-uniform float uAspect;
+  <video id="video" loop playsinline webkit-playsinline crossorigin="anonymous" style="display:none;"></video>
 
-const float PI=3.141592653589793;
-const float R=1.0;
-const float HALF_H=0.8835729338; // pi*9/32，按16:9视频设置半高
+  <script>
+    const video = document.getElementById('video');
+    const fileInput = document.getElementById('video-file');
+    const playBtn = document.getElementById('play-btn');
+    const fileName = document.getElementById('file-name');
+    const sensorBtn = document.getElementById('sensor-btn');
 
-void main(){
-  // 约100°视场，避免原来的90°tan发散
-  float fov=100.0*PI/180.0;
-  float tanHalf=tan(fov*0.5);
+    // 1. 初始化 3D 引擎与相机
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    
+    // 透视相机设置：85度 FOV 贴近人类人眼第一视角自然视场
+    const camera = new THREE.PerspectiveCamera(85, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
 
-  float sx=(vUv.x-0.5)*2.0*tanHalf;
-  float sy=(vUv.y-0.5)*2.0*tanHalf/uAspect;
+    // 2. 创建防扁平的 180 度第一视角半球体 (180 Dome Geometry)
+    const texture = new THREE.VideoTexture(video);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.format = THREE.RGBAFormat;
 
-  // 相机朝向 -Z
-  vec3 d=normalize(vec3(sx,sy,-1.0));
+    // 参数分析：半径 10，经线切片 64，纬线切片 32，经度范围 Math.PI (即180度)
+    const geometry = new THREE.SphereGeometry(10, 64, 32, Math.PI / 2, Math.PI, 0, Math.PI);
+    
+    // 翻转几何体让纹理贴在半球内侧（人站在球心往外看）
+    geometry.scale(-1, 1, 1);
 
-  // yaw
-  float cy=cos(uYaw), syaw=sin(uYaw);
-  d=vec3(
-    cy*d.x + syaw*d.z,
-    d.y,
-    -syaw*d.x + cy*d.z
-  );
+    const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
+    const domeMesh = new THREE.Mesh(geometry, material);
+    
+    // 旋转半球使正面朝向摄像机
+    domeMesh.rotation.y = -Math.PI / 2;
+    scene.add(domeMesh);
 
-  // pitch
-  float cp=cos(uPitch), sp=sin(uPitch);
-  d=vec3(
-    d.x,
-    cp*d.y - sp*d.z,
-    sp*d.y + cp*d.z
-  );
+    camera.position.set(0, 0, 0.1); // 相机置于第一视角球心
 
-  // 与圆柱 x²+z²=R² 求交
-  float A=d.x*d.x+d.z*d.z;
-  if(A<0.00001){
-    gl_FragColor=vec4(0.0);
-    return;
-  }
+    // 3. 视角控制（触摸拖拽 + 陀螺仪 + 双指缩放）
+    let lon = 0, lat = 0;
+    let startX = 0, startY = 0;
+    let touchDistance = 0;
 
-  float B=0.0;
-  float C=-R*R;
-  float disc=B*B-4.0*A*C;
-  if(disc<=0.0){
-    gl_FragColor=vec4(0.0);
-    return;
-  }
+    // 滑动控制
+    window.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        // 双指捏合计算
+        touchDistance = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+      }
+    });
 
-  float t=(-B+sqrt(disc))/(2.0*A);
-  if(t<=0.0){
-    gl_FragColor=vec4(0.0);
-    return;
-  }
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1) {
+        const deltaX = e.touches[0].clientX - startX;
+        const deltaY = e.touches[0].clientY - startY;
+        startX = e.touches[0].clientX;
+        startY = e.touches[0].clientY;
+        lon -= deltaX * 0.25;
+        lat += deltaY * 0.25;
+        lat = Math.max(-80, Math.min(80, lat));
+      } else if (e.touches.length === 2) {
+        // 调节视场角 FOV（防止人物太近或太远拉伸）
+        const newDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY
+        );
+        const factor = touchDistance / newDist;
+        touchDistance = newDist;
+        camera.fov = Math.max(45, Math.min(105, camera.fov * factor));
+        camera.updateProjectionMatrix();
+      }
+    });
 
-  vec3 p=d*t;
+    // 开启陀螺仪
+    sensorBtn.addEventListener('click', () => {
+      sensorBtn.style.display = 'none';
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(state => {
+          if (state === 'granted') window.addEventListener('deviceorientation', handleOrientation);
+        });
+      } else {
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+    });
 
-  // 只显示前方180°半圆柱
-  float lon=atan(p.x,-p.z);
-  if(abs(lon)>PI*0.5 || p.y < -HALF_H || p.y > HALF_H){
-    gl_FragColor=vec4(0.0);
-    return;
-  }
-
-  float u=0.5+lon/PI;
-  float vv=0.5-p.y/(2.0*HALF_H);
-
-  gl_FragColor=texture2D(uVideo,vec2(u,vv));
-}`;
-
-function compile(type,src){
-  const s=gl.createShader(type);
-  gl.shaderSource(s,src);
-  gl.compileShader(s);
-  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))
-    throw new Error(gl.getShaderInfoLog(s));
-  return s;
-}
-
-const program=gl.createProgram();
-gl.attachShader(program,compile(gl.VERTEX_SHADER,VS));
-gl.attachShader(program,compile(gl.FRAGMENT_SHADER,FS));
-gl.linkProgram(program);
-if(!gl.getProgramParameter(program,gl.LINK_STATUS))
-  throw new Error(gl.getProgramInfoLog(program));
-gl.useProgram(program);
-
-const quad=gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER,quad);
-gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([
-  -1,-1, 1,-1, -1,1, 1,1
-]),gl.STATIC_DRAW);
-
-const aPos=gl.getAttribLocation(program,"aPos");
-gl.enableVertexAttribArray(aPos);
-gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,0,0);
-
-const texture=gl.createTexture();
-gl.bindTexture(gl.TEXTURE_2D,texture);
-gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
-gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-
-const uYaw=gl.getUniformLocation(program,"uYaw");
-const uPitch=gl.getUniformLocation(program,"uPitch");
-const uAspect=gl.getUniformLocation(program,"uAspect");
-
-function resize(){
-  const d=Math.min(devicePixelRatio||1,2);
-  canvas.width=Math.round(innerWidth*d);
-  canvas.height=Math.round(innerHeight*d);
-  gl.viewport(0,0,canvas.width,canvas.height);
-}
-addEventListener("resize",resize,{passive:true});
-resize();
-
-function render(){
-  requestAnimationFrame(render);
-  if(video.readyState<2)return;
-
-  gl.bindTexture(gl.TEXTURE_2D,texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
-
-  try{
-    gl.texImage2D(
-      gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,
-      gl.UNSIGNED_BYTE,video
-    );
-  }catch(e){return}
-
-  gl.uniform1f(uYaw,yaw);
-  gl.uniform1f(uPitch,pitch);
-  gl.uniform1f(uAspect,canvas.width/canvas.height);
-  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
-}
-render();
-
-$("file").addEventListener("change",()=>{
-  const f=$("file").files[0];
-  if(!f)return;
-
-  if(objectURL)URL.revokeObjectURL(objectURL);
-  objectURL=URL.createObjectURL(f);
-  video.src=objectURL;
-  video.load();
-
-  hint.textContent="视频已载入，点击“播放”";
-  status.textContent="状态：视频已载入　｜　陀螺仪："+(sensor?"已连接":"未启用");
-});
-
-$("play").addEventListener("click",async()=>{
-  if(!video.src){
-    hint.textContent="请先选择视频";
-    return;
-  }
-
-  try{
-    await video.play();
-    hint.style.display="none";
-  }catch(e){
-    hint.textContent="无法播放："+e.message;
-  }
-});
-
-function setStatus(s){
-  status.textContent=
-    "状态："+(video.src?"视频已载入":"等待视频")+
-    "　｜　陀螺仪："+s;
-}
-
-function orientation(e){
-  if(e.alpha==null || e.beta==null)return;
-
-  if(firstOrientation){
-    baseAlpha=e.alpha||0;
-    baseBeta=e.beta||0;
-    firstOrientation=false;
-  }
-
-  let da=(e.alpha||0)-baseAlpha;
-  while(da>180)da-=360;
-  while(da<-180)da+=360;
-
-  let db=(e.beta||0)-baseBeta;
-
-  yaw=da*Math.PI/180.0;
-  pitch=Math.max(
-    -Math.PI/3,
-    Math.min(Math.PI/3,-db*Math.PI/180.0)
-  );
-
-  sensor=true;
-  setStatus("已连接");
-}
-
-async function enableGyro(){
-  try{
-    if(!("DeviceOrientationEvent" in window)){
-      setStatus("此浏览器不支持");
-      return;
-    }
-
-    const secure=
-      location.protocol==="https:" ||
-      location.hostname==="localhost" ||
-      location.hostname==="127.0.0.1";
-
-    if(!secure){
-      setStatus("被浏览器禁止：请使用HTTPS地址");
-      return;
-    }
-
-    if(typeof DeviceOrientationEvent.requestPermission==="function"){
-      const result=await DeviceOrientationEvent.requestPermission();
-      if(result!=="granted"){
-        setStatus("权限被拒绝");
-        return;
+    function handleOrientation(event) {
+      if (event.alpha !== null) {
+        const alpha = event.alpha ? THREE.MathUtils.degToRad(event.alpha) : 0;
+        const beta = event.beta ? THREE.MathUtils.degToRad(event.beta) : 0;
+        const gamma = event.gamma ? THREE.MathUtils.degToRad(event.gamma) : 0;
+        camera.rotation.set(beta, alpha, -gamma, 'YXZ');
       }
     }
 
-    firstOrientation=true;
+    // 4. 文件加载与播放
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        video.src = URL.createObjectURL(file);
+        fileName.textContent = file.name;
+        video.play();
+        playBtn.textContent = '❚❚ 暂停';
+      }
+    });
 
-    window.addEventListener(
-      "deviceorientation",orientation,true
-    );
-    window.addEventListener(
-      "deviceorientationabsolute",orientation,true
-    );
+    playBtn.addEventListener('click', () => {
+      if (!video.src) return;
+      if (video.paused) {
+        video.play();
+        playBtn.textContent = '❚❚ 暂停';
+      } else {
+        video.pause();
+        playBtn.textContent = '▶ 播放';
+      }
+    });
 
-    setStatus("等待传感器…");
+    // 5. 逐帧渲染与视线计算
+    function animate() {
+      requestAnimationFrame(animate);
+      if (sensorBtn.style.display !== 'none') {
+        // 未开启陀螺仪时使用触屏滑动视线
+        const phi = THREE.MathUtils.degToRad(90 - lat);
+        const theta = THREE.MathUtils.degToRad(lon);
+        const target = new THREE.Vector3(
+          500 * Math.sin(phi) * Math.cos(theta),
+          500 * Math.cos(phi),
+          500 * Math.sin(phi) * Math.sin(theta)
+        );
+        camera.lookAt(target);
+      }
+      renderer.render(scene, camera);
+    }
+    animate();
 
-    setTimeout(()=>{
-      if(!sensor)
-        setStatus("未收到传感器数据，请检查运动传感器权限");
-    },2000);
-
-  }catch(err){
-    setStatus("被禁止或不可用");
-  }
-}
-
-$("gyro").addEventListener("click",enableGyro);
-
-$("center").addEventListener("click",()=>{
-  yaw=0;
-  pitch=0;
-  firstOrientation=true;
-  if(sensor)setStatus("已连接");
-});
-
-$("full").addEventListener("click",async()=>{
-  try{
-    if(document.fullscreenElement)
-      await document.exitFullscreen();
-    else
-      await document.documentElement.requestFullscreen();
-  }catch(e){}
-});
-
-canvas.addEventListener("pointerdown",e=>{
-  drag=true;
-  lastX=e.clientX;
-  lastY=e.clientY;
-  try{canvas.setPointerCapture(e.pointerId)}catch(_){}
-});
-
-canvas.addEventListener("pointerup",()=>drag=false);
-canvas.addEventListener("pointercancel",()=>drag=false);
-
-canvas.addEventListener("pointermove",e=>{
-  if(!drag)return;
-
-  yaw-=(e.clientX-lastX)*0.006;
-  pitch-=(e.clientY-lastY)*0.006;
-
-  pitch=Math.max(
-    -Math.PI/3,
-    Math.min(Math.PI/3,pitch)
-  );
-
-  lastX=e.clientX;
-  lastY=e.clientY;
-});
-</script>
+    // 窗口自适应
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
 </body>
 </html>
+
